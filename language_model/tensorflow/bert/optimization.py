@@ -13,7 +13,7 @@ import lamb_optimizer_v1 as lamb_optimizer
 
 
 def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
-                     optimizer_name='adamw', poly_power=1.0, start_warmup_step=0):
+                     optimizer_name='adamw', poly_power=1.0, start_warmup_step=0, opt_beta_1=0.9, opt_beta_2=0.999, opt_weight_decay=0.01):
   """Creates an optimizer training op."""
   global_step = tf.train.get_or_create_global_step()
 
@@ -60,18 +60,18 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
     tf.logging.info('using adamw')
     optimizer = AdamWeightDecayOptimizer(
         learning_rate=learning_rate,
-        weight_decay_rate=0.01,
-        beta_1=0.9,
-        beta_2=0.999,
+        weight_decay_rate=opt_weight_decay,
+        beta_1=opt_beta_1,
+        beta_2=opt_beta_2,
         epsilon=1e-6,
         exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
   elif optimizer_name == "lamb":
     tf.logging.info('using lamb')
     optimizer = lamb_optimizer.LAMBOptimizer(
         learning_rate=learning_rate,
-        weight_decay_rate=0.01,
-        beta_1=0.9,
-        beta_2=0.999,
+        weight_decay_rate=opt_weight_decay,
+        beta_1=opt_beta_1,
+        beta_2=opt_beta_2,
         epsilon=1e-6,
         exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
   else:

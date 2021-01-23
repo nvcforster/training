@@ -165,6 +165,9 @@ class BertModel(object):
             initializer_range=config.initializer_range,
             word_embedding_name="word_embeddings",
             use_one_hot_embeddings=use_one_hot_embeddings)
+        
+        tf.identity(input_ids, name='input_ids')
+        tf.identity(self.word_embedding_output, name="word_embedding_output")
 
         # Add positional embeddings and token type embeddings, then layer
         # normalize and perform dropout.
@@ -179,6 +182,8 @@ class BertModel(object):
             initializer_range=config.initializer_range,
             max_position_embeddings=config.max_position_embeddings,
             dropout_prob=config.hidden_dropout_prob)
+
+        tf.identity(self.embedding_output, name="embedding_output")
 
       with tf.variable_scope("encoder"):
         # This converts a 2D mask of shape [batch_size, seq_length] to a 3D
@@ -217,6 +222,8 @@ class BertModel(object):
             config.hidden_size,
             activation=tf.tanh,
             kernel_initializer=create_initializer(config.initializer_range))
+
+        tf.identity(self.pooled_output, name="pooler_output")
 
   def get_pooled_output(self):
     return self.pooled_output
@@ -360,10 +367,9 @@ def dropout(input_tensor, dropout_prob):
 
 def layer_norm(input_tensor, name=None):
   """Run layer normalization on the last dimension of the tensor."""
-  # return contrib_layers.layer_norm(
-  #     inputs=input_tensor, begin_norm_axis=-1, begin_params_axis=-1, scope=name)
   return tf.keras.layers.LayerNormalization(
-          name=name, axis=-1, dtype=tf.float32, epsilon=1e-12)(input_tensor)
+    name="LayerNorm" if not name else name, axis=-1,
+    dtype=tf.float32, epsilon=1e-12)(input_tensor)
   
 
 def layer_norm_and_dropout(input_tensor, dropout_prob, name=None):
@@ -406,7 +412,6 @@ def embedding_lookup(input_ids,
   # reshape to [batch_size, seq_length, 1].
   if input_ids.shape.ndims == 2:
     input_ids = tf.expand_dims(input_ids, axis=[-1])
-
   embedding_table = tf.get_variable(
       name=word_embedding_name,
       shape=[vocab_size, embedding_size],
@@ -480,11 +485,17 @@ def embedding_postprocessor(input_tensor,
         initializer=create_initializer(initializer_range))
     # This vocab will be small so we always do one-hot here, since it is always
     # faster for a small vocabulary.
+    
+    tf.identity(token_type_ids, name='my_token_type_ids')
+    
     flat_token_type_ids = tf.reshape(token_type_ids, [-1])
     one_hot_ids = tf.one_hot(flat_token_type_ids, depth=token_type_vocab_size)
     token_type_embeddings = tf.matmul(one_hot_ids, token_type_table)
     token_type_embeddings = tf.reshape(token_type_embeddings,
                                        [batch_size, seq_length, width])
+    
+    tf.identity(token_type_embeddings, name='token_type_embeddings_output')
+    
     output += token_type_embeddings
 
   if use_position_embeddings:
@@ -517,8 +528,11 @@ def embedding_postprocessor(input_tensor,
       position_embeddings = tf.reshape(position_embeddings,
                                        position_broadcast_shape)
       output += position_embeddings
-
+  
+  tf.identity(output, name='embedding_summation_output')
+ 
   output = layer_norm_and_dropout(output, dropout_prob)
+  tf.identity(output, name="output")
   return output
 
 
@@ -744,6 +758,8 @@ def attention_layer(from_tensor,
   from_shape = get_shape_list(from_tensor, expected_rank=[2, 3])
   to_shape = get_shape_list(to_tensor, expected_rank=[2, 3])
 
+  tf.identity(from_tensor, name="from_tensor")
+
   if len(from_shape) != len(to_shape):
     raise ValueError(
         "The rank of `from_tensor` must match the rank of `to_tensor`.")
@@ -770,22 +786,28 @@ def attention_layer(from_tensor,
   query_layer = dense_layer_3d(from_tensor, num_attention_heads, size_per_head,
                                create_initializer(initializer_range), query_act,
                                "query")
+  tf.identity(query_layer, name='query_output')
 
   # `key_layer` = [B, T, N, H]
   key_layer = dense_layer_3d(to_tensor, num_attention_heads, size_per_head,
                              create_initializer(initializer_range), key_act,
                              "key")
+  tf.identity(key_layer, name='key_output')
 
   # `value_layer` = [B, T, N, H]
   value_layer = dense_layer_3d(to_tensor, num_attention_heads, size_per_head,
                                create_initializer(initializer_range), value_act,
                                "value")
+  tf.identity(value_layer, name='value_output')
 
   # Take the dot product between "query" and "key" to get the raw
   # attention scores.
   attention_scores = tf.einsum("BTNH,BFNH->BNFT", key_layer, query_layer)
+  tf.identity(attention_scores, name='attention_score_output')
+  
   attention_scores = tf.multiply(attention_scores,
                                  1.0 / math.sqrt(float(size_per_head)))
+  tf.identity(attention_scores, name='attention_score_scaled_output')
 
   if attention_mask is not None:
     # `attention_mask` = [B, 1, F, T]
@@ -799,10 +821,12 @@ def attention_layer(from_tensor,
     # Since we are adding it to the raw scores before the softmax, this is
     # effectively the same as removing these entirely.
     attention_scores += adder
+    tf.identity(attention_scores, name='attention_score_additive_output')
 
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
   attention_probs = tf.nn.softmax(attention_scores)
+  tf.identity(attention_probs, name='attention_probs_output')
 
   # This is actually dropping out entire tokens to attend to, which might
   # seem a bit unusual, but is taken from the original Transformer paper.
@@ -810,6 +834,8 @@ def attention_layer(from_tensor,
 
   # `context_layer` = [B, F, N, H]
   context_layer = tf.einsum("BNFT,BTNH->BFNH", attention_probs, value_layer)
+
+  tf.identity(context_layer, name="context_layer")
 
   return context_layer
 
@@ -882,7 +908,6 @@ def transformer_model(input_tensor,
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
-
       with tf.variable_scope("attention"):
         with tf.variable_scope("self"):
           attention_output = attention_layer(
@@ -901,8 +926,13 @@ def transformer_model(input_tensor,
               attention_output, hidden_size,
               num_attention_heads, attention_head_size,
               create_initializer(initializer_range), None, "dense")
+
+          tf.identity(attention_output, name="dense_output")
+
           attention_output = dropout(attention_output, hidden_dropout_prob)
           attention_output = layer_norm(attention_output + layer_input)
+
+          tf.identity(attention_output, name="attention_output")
 
       # The activation is only applied to the "intermediate" hidden layer.
       with tf.variable_scope("intermediate"):
@@ -910,13 +940,21 @@ def transformer_model(input_tensor,
             attention_output, intermediate_size,
             create_initializer(initializer_range), intermediate_act_fn, "dense")
 
+        tf.identity(intermediate_output, name="intermediate_output")
+
       # Down-project back to `hidden_size` then add the residual.
       with tf.variable_scope("output"):
         layer_output = dense_layer_2d(intermediate_output, hidden_size,
                                       create_initializer(initializer_range),
                                       None, "dense")
+        
+        tf.identity(layer_output, name="dense_layer_output")
+
         layer_output = dropout(layer_output, hidden_dropout_prob)
         layer_output = layer_norm(layer_output + attention_output)
+        
+        tf.identity(layer_output, name="layer_output")
+
         prev_output = layer_output
         all_layer_outputs.append(layer_output)
 
